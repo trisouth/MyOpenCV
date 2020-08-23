@@ -1,165 +1,54 @@
-"""
-
-  @author: Utku Guney (trisouth@github)
-
-  @development environment:
-  
-    Windows 10
-    Python 3.7.6
-    OpenCV 4.2.0
-
-  @version history:
-      1. 20.08.2020 - v1.0 - initial release
-        
-  @description:
-      
-      This Python code reads the video files located in videoFilesPath and
-      stores each frame in the video files as an image into the framePath.
-      
-      Those stored frames are to be used in AI model training.
-      
-      Note: This code crashed with videos captured with GoPro Hero 4.
-      Code started running but in the 52nd frame crashed.
-      
-      Researches in the web resulted in that, OpenCV is not happy with audio 
-      tracks in videos. I removed the audio with VLC from all input videos,
-      and worked fine.
-      
-"""
-
 import glob
 import cv2
 import ntpath
 from queue import LifoQueue
-
 import threading
 import time
+import os
+import psutil
+from datetime import datetime
 
-videoFilesPath = "C:\\Users\\Utku.GUNEY\\Desktop\\100GOPRO\\"
-framePath = "C:\\Users\\Utku.GUNEY\\Desktop\\100GOPRO\\output\\"
+# input video files path
+videoFilesPath = "/home/utku/Desktop/100GOPRO/"
+# output frames path
+framePath = "/home/utku/Desktop/100GOPRO/output/"
 
 videoFiles = LifoQueue()
 frames = LifoQueue()
 
-"""
-def captureFrames(videoFile):
-    
-    video = cv2.VideoCapture(videoFile)
-    print("Video Details")
-    print("File name   : " + videoFile)
-    print("FPS         : " + str(video.get(cv2.CAP_PROP_FPS)))
-    print("Frame Width : " + str(video.get(cv2.CAP_PROP_FRAME_WIDTH)))
-    print("Frame Height: " + str(video.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-    
-    frameCount = 0
-    windowName = "Open CV Video Player"
-    
-    # -14 is based on yourfile name preference
-    frameName = getVideoFileName(videoFile)[:-14] + "_"
-    
-    # Start reading the video file
-    _, frame = video.read()
-    
-    # Print a sample output frame name
-    print(framePath + frameName + str(frameCount).zfill(5) + ".jpg")
-    
-    while _:
-        
-        # Count the frames
-        frameCount = frameCount + 1
-        
-        # Save the frame to an image file
-        cv2.imwrite(framePath + frameName + str(frameCount).zfill(5) + ".jpg", frame)        
-        
-        # Read the next frame from video file
-        _, frame = video.read()
-        
-        #if frame is None:
-        #    print("Frame is none")
-        
-        if _:
-            
-            # Delete comments if you want to watch videos during processing
-            #cv2.imshow(windowName, frame)
-            
-            #if cv2.waitKey(1) == 27:
-            #    break
-            
-            pass
-            
-        else:
-            
-            break
-        
-            
-    print("Frame Count: " + str(frameCount))
-    cv2.destroyAllWindows()
-    video.release()
-"""    
+# number of video file reader threads
+readerCount = 2
+# number of frame writer threads. 
+# Depending on disk performance, writer to reader ratio should be 3 : 1 or higher
+writerCount = 8
+
+frameCounts = LifoQueue()
+frameCount = 0
+
+liveReader = True
+
+# maximum memory amount in MB which can be consumed by this app. keep this limit as high as possible.
+memoryUsageLimit = 32768
+
+# maximum counter limit for a single reader thread to hit maximum memory amount. 
+# if a reader thread reaches memoryUsageLimit value for more than memoryLimitCounter times then kills itself.
+memoryLimitCounter = 3
+
+# number of seconds, a reader will sleep when application reaches memoryUsageLimit.
+memoryLimitWaitSecs = 10
+
+# Application sleeps for a maximum duration of memoryLimitCounter X memoryLimitWaitSecs seconds. if during
+# sleep time, writer threads can open space in memory by writing frames to disk, then reader threads continue
+# storing frames in memory. if not, then reader threads kill themselves; application stops reading videos.
 
 def getVideoFiles():
     
     global videoFiles
     
-    # Use your own pattern for your input video files
-    #videoFiles = glob.glob(videoFilesPath + "*-converted.MP4")
-    
-    for videoFile in glob.glob(videoFilesPath + "*-converted.MP4"):
+    for videoFile in glob.glob(videoFilesPath + "*-converted.mp4"):
         
-        #captureFrames(videoFile)
         videoFiles.put(videoFile)
-        
 
-def getVideoFileName(videoFilePath):
-    
-    head, tail = ntpath.split(videoFilePath)
-    return tail or ntpath.basename(head)
-    
-#   >>> paths = ['a/b/c/', 'a/b/c', '\\a\\b\\c', '\\a\\b\\c\\', 'a\\b\\c', 
-#   ...     'a/b/../../a/b/c/', 'a/b/../../a/b/c']
-#   >>> [path_leaf(path) for path in paths]
-#   ['c', 'c', 'c', 'c', 'c', 'c', 'c']
-#
-#   ntpath module works in both windows and linux. above are possible videoFilePath samples
-#   and this function returns always the right file name
-
-
-
-exitFlag = 0
-frameCount = 0
-
-class  FrameWriter(threading.Thread):
-    
-    def __init__(self, threadID, threadName):
-        threading.Thread.__init__(self)
-        self.threadID = threadID
-        self.threadName = threadName
-    
-    def run(self):
-        #print("Starting: " + self.threadName)
-        writeDisk(self.threadID, self.threadName)
-
-        
-def writeDisk(threadID, threadName):
-    
-    print("Writer: " + str(threadID) + " started writing to disk")
-    
-    global frameCount
-    
-    while ((not threads[0] is None) or (not threads[1] is None)):
-        
-        if not frames.empty():
-        
-            cv2.imwrite(framePath + "frameName" + str(threadID) + "-" + str(frameCount).zfill(5) + ".jpg", frames.get())
-            frame = frames.get()
-            #print(framePath + "frameName" + str(frameCount).zfill(5) + ".jpg")
-            
-            frameCount = frameCount + 1
-    
-    print("Writer: " + str(threadID) + " finished writing to disk")
-    #del threads[threadID]
-    
-    
 class VideoFramer(threading.Thread):
     
     def __init__(self, threadID, threadName):
@@ -169,17 +58,19 @@ class VideoFramer(threading.Thread):
         #self.videoFile = videoFile
         
     def run(self):
-        print("Starting: " + self.threadName)
+        #print("Starting: " + self.threadName)
         frame(self.threadID, self.threadName)
 
-        
 def frame(threadID, threadName):
     
-    while not videoFiles.empty():
+    global liveReader
+    memoryLimit = True
+    
+    while not videoFiles.empty() and memoryLimit:
         
         videoFile = videoFiles.get()
         
-        readFrameCount = 0
+        readFrameCount = 0 # for informational purposes on screen.
         
         video = cv2.VideoCapture(videoFile)
         _, frame = video.read()
@@ -193,7 +84,7 @@ def frame(threadID, threadName):
             
             if frame is None:
                 
-                #    print("Frame is none")
+                # in some cases, due to video data, the read frame can be none
                 
                 if _:
                     
@@ -204,104 +95,124 @@ def frame(threadID, threadName):
                     break
         
         video.release()
+        
+        # after each video file, do memory and live reader threads check.
+        tempMemoryLimitCounter = 1
+        
+        process = psutil.Process(os.getpid())
+        mem = process.memory_info().rss
+        
+        # wait for memoryLimitCounter times, if the memory consumption is over memoryUsageLimit
+        # in every wait, this thread sleeps for memoryLimitWaitSecs seconds
+        while mem / (1024 * 1024) > memoryUsageLimit:
             
-        print(threadName + " " + videoFile + " " + str(readFrameCount))
+            print(threadName + " " + str(mem))
+            tempMemoryLimitCounter = tempMemoryLimitCounter + 1
+            
+            if tempMemoryLimitCounter > memoryLimitCounter:
+                memoryLimit = False
+                print(threadName + " memory usage didnt drop after specified limits.")
+                break
+            else:
+                print(threadName + " memory usage reached " + str(memoryUsageLimit) + " MB. waiting for " + str(memoryLimitWaitSecs) + " seconds.")
+                time.sleep(memoryLimitWaitSecs)
+            
+            mem = process.memory_info().rss
+            
+        # for informational purposes. does not have any effect in functionality.
+        #print(threadName + " " + videoFile + " " + str(readFrameCount))
+        #frameCounts.put(readFrameCount)
     
-    print("Reader" + str(threadID) + " - finished reading video files")
+    #print("Reader" + str(threadID) + " - finished reading video files")
     
-    #del threads[threadID]
     threads[threadID] = None
     
-    #t = FrameWriter(threadID, "writer-" + str(threadID))
-    #t.start()
-    #threads[threadID] = t
-
-
-class myThread(threading.Thread):
+    tempLiveReader = False
     
-    def __init__(self, threadID, name, counter):
+    for i in range(readerCount):
+        
+        if threads[i] is None:
+            
+            #print(threadName + " " + "thread[" + str(i) + "] is none")
+            tempLiveReader = False
+        else:
+            #print(threadName + " " + "thread[" + str(i) + "] is not none")
+            tempLiveReader = True
+            break
+    
+    #print(threadName + " is changing liveReader to " + str(tempLiveReader))
+    liveReader = tempLiveReader
+
+class FrameWriter(threading.Thread):
+    
+    def __init__(self, threadID, threadName):
         threading.Thread.__init__(self)
         self.threadID = threadID
-        self.name = name
-        self.counter = counter
-        
-    def run(self):
-        print("Starting " + self.name)
-        print_time(self.name, self.counter, 5)
-        print("Existing " + self.name)
-        
-def print_time(threadName, delay, counter):
+        self.threadName = threadName
     
-    while(counter):
-        if exitFlag:
-            threadName.exit()
-            
-        time.sleep(delay)
-        print ("%s: %s" % (threadName, time.ctime(time.time())))
-        counter -= 1
+    def run(self):
+        #print("Starting: " + self.threadName)
+        writeDisk(self.threadID, self.threadName)
 
+def writeDisk(threadID, threadName):
+    
+    #print("Writer: " + str(threadID) + " started writing to disk")
+    
+    global frameCount
+    
+    while not frames.empty():
+        
+        cv2.imwrite(framePath + "frameName" + str(threadID) + "-" + str(frameCount).zfill(5) + ".jpg", frames.get())
 
+        frameCount = frameCount + 1
+    
+    #print("Writer: " + str(threadID) + " finished writing to disk")
+    #del threads[threadID]
 
 if __name__ == "__main__":
+    
+    # datetime object containing current date and time
+    now = datetime.now()
+    
+    # dd/mm/YY H:M:S
+    dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
+    print("date and time =", dt_string)
     
     getVideoFiles()
     
     threads = {}
     
-    for i in range(2):
+    for i in range(readerCount):
         
         t = VideoFramer(i, "reader-" + str(i))
         t.start()
         threads[i] = t
-    
+        
     print("started readers")
     
-    #time.sleep(2)
-    
-    while frames.empty():
-        print("waiting")
-        pass
-    
-    print("starting writers")
+    while not frames.empty() or liveReader:
         
-    for i in range(2, 6):
+        #print("frames is not empty or there are liveReaders.")
+        for i in range(readerCount, readerCount + writerCount):
             
-        t = FrameWriter(i, "writer-" + str(i))
-        t.start()
-        threads[i] = t
+            t = FrameWriter(i, "writer-" + str(i))
+            t.start()
+            threads[i] = t
+            
+        for i in range(readerCount, readerCount + writerCount):
+        
+            try:
+                t = threads[i]
+                t.join()
+            except:
+                pass
     
-    print("started writers")
+    # datetime object containing current date and time
+    now = datetime.now()
     
-    print("joining")
-    for i in range(7):
-        #print(str(i) + " is joining")
-        try:
-            t = threads[i]
-            t.join()
-        except:
-            pass
+    # dd/mm/YY H:M:S
+    dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
+    print("date and time =", dt_string)
     
-    print("len(threads)=" + str(len(threads)))
-    
-
-    
-    """
-    thread1 = VideoFramer(1, "Thread-1")
-    thread2 = VideoFramer(2, "Thread-2")
-    
-    threads[1] = thread1
-    threads[2] = thread2
-    
-    # Start new Threads
-    thread1.start()
-    thread2.start()
-    
-    print("1 joining")
-    thread1.join()
-    print("2 joining")
-    thread2.join()
-    """
-    
-    print ("Exiting Main Thread")
-    
-    print("ok")
+    #print(liveReader)
+    print("the end")
